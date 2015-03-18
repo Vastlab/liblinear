@@ -17,9 +17,9 @@ template <class T> static inline T max(T x,T y) { return (x>y)?x:y; }
 template <class S, class T> static inline void clone(T*& dst, S* src, int n)
 {
 	dst = new T[n];
-	memcpy((void *)dst,(void *)src,sizeof(T)*n);
+	memcpy((void *)dst,(void *)src,(size_t)n*sizeof(T));
 }
-#define Malloc(type,n) (type *)malloc((n)*sizeof(type))
+#define Malloc(type,n) (type *)malloc((size_t)(n)*sizeof(type))
 #define INF HUGE_VAL
 
 static void print_string_stdout(const char *s)
@@ -506,7 +506,7 @@ void Solver_MCSVM_CS::solve_sub_problem(double A_i, int yi, double C_yi, int act
 	clone(D, B, active_i);
 	if(yi < active_i)
 		D[yi] += A_i*C_yi;
-	qsort(D, active_i, sizeof(double), compare_double);
+	qsort(D, (size_t)active_i, sizeof(double), compare_double);
 
 	double beta = D[0] - A_i*C_yi;
 	for(r=1;r<active_i && beta<r*D[r];r++)
@@ -2131,8 +2131,8 @@ static void group_classes(const problem *prob, int *nr_class_ret, int **label_re
 			if(nr_class == max_nr_class)
 			{
 				max_nr_class *= 2;
-				label = (int *)realloc(label,max_nr_class*sizeof(int));
-				count = (int *)realloc(count,max_nr_class*sizeof(int));
+				label = (int *)realloc(label,(size_t)max_nr_class*sizeof(int));
+				count = (int *)realloc(count,(size_t)max_nr_class*sizeof(int));
 			}
 			label[nr_class] = this_label;
 			count[nr_class] = 1;
@@ -2508,6 +2508,29 @@ double predict_values(const struct model *model_, const struct feature_node *x, 
 				dec_values[i] += w[(idx-1)*nr_w+i]*lx->value;
 	}
 
+        if(model_->openset_dim >0 && model_->omega){
+          for(i=0;i<nr_w;i++){
+            double omega = model_->omega[i];
+            double alpha = model_->alpha[i];
+            // if you want to see pre-slab scores you can uncomment this and the \n line below
+            //            fprintf(stderr,"%g ", dec_values[i]);
+            double t1 = omega-dec_values[i];
+            double t2 = dec_values[i]-alpha;
+            double dist=t1;
+            /*convert it so we return positive if in slab, and negative if outside (and distance is to nearest plane)*/
+            if (t2 <= 0 )  dist = t2;
+            else if (t1 <= 0)  dist = t1;
+            else if(t1 > t2) dist = t2; 
+            else dist =t1;
+            if(omega-alpha >0) {
+              dist = dist/(omega-alpha);  // we normalize by slab width.. 
+            }
+            dec_values[i] = dist;
+          }
+          //        fprintf(stderr,"\n");
+        }
+          
+
 	if(nr_class==2)
 	{
 		if(check_regression_model(model_))
@@ -2523,7 +2546,8 @@ double predict_values(const struct model *model_, const struct feature_node *x, 
 			if(dec_values[i] > dec_values[dec_max_idx])
 				dec_max_idx = i;
 		}
-		return model_->label[dec_max_idx];
+                if(dec_values[dec_max_idx]>0) return model_->label[dec_max_idx];
+                else return -999999;
 	}
 }
 
@@ -2615,6 +2639,21 @@ int save_model(const char *model_file_name, const struct model *model_)
 	fprintf(fp, "nr_feature %d\n", nr_feature);
 
 	fprintf(fp, "bias %.16g\n", model_->bias);
+        if(param.do_open){
+          fprintf(stderr, "Thanks for using the 1-vs-set extension of liblinear. See README for citation process\n");
+          fprintf(fp, "openset_dim %d\n", model_->openset_dim);
+          // if 1-vs-set save the plane offsets
+          if(model_->alpha != NULL) {
+            fprintf(fp,"alpha ");
+            for(int i=0; i< model_->openset_dim; i++) fprintf(fp," %24.20g", model_->alpha[i]);
+            fprintf(fp,"\n");
+          }
+          if(model_->omega != NULL) {
+            fprintf(fp,"omega ");
+            for(int i=0; i< model_->openset_dim; i++) fprintf(fp," %24.20g", model_->omega[i]);
+            fprintf(fp,"\n");
+          }
+        }
 
 	fprintf(fp, "w\n");
 	for(i=0; i<w_size; i++)
@@ -2644,6 +2683,10 @@ struct model *load_model(const char *model_file_name)
 	double bias;
 	model *model_ = Malloc(model,1);
 	parameter& param = model_->param;
+        model_->alpha = NULL;
+        model_->omega = NULL;
+        model_->openset_dim = 1;
+
 
 	model_->label = NULL;
 
@@ -2691,6 +2734,38 @@ struct model *load_model(const char *model_file_name)
 		{
 			fscanf(fp,"%lf",&bias);
 			model_->bias=bias;
+		}
+		else if(strcmp(cmd,"openset_dim")==0){
+                  fscanf(fp,"%d",&model_->openset_dim);
+                  param.do_open=1;
+                }
+		else if(strcmp(cmd,"alpha")==0)
+		{
+                  int n=model_->openset_dim;
+                  param.do_open=1;
+                  fprintf(stderr, "Thanks for using the 1-vs-set extension of liblinear. See README for citation process\n");
+                  if(n>0){
+                    model_->alpha = Malloc(double,n);
+                    for(int i=0;i<n;i++) fscanf(fp,"%lf",&model_->alpha[i]);
+                  }
+                  else {
+                    fprintf(stderr,"Openset alpha found for non openset class, ignoring it.\n");
+                    char junk[10*4096];
+                    fgets(junk,10*4096,fp); /* eat the line */
+                  }
+		}
+		else if(strcmp(cmd,"omega")==0)
+		{
+                  int n=model_->openset_dim;
+                  if(n>0){
+                    model_->omega = Malloc(double,n);
+                    for(int i=0;i<n;i++) fscanf(fp,"%lf",&model_->omega[i]);
+                  }
+                  else {
+                    fprintf(stderr,"Openset omega found for non openset class, ignoring it.\n");
+                    char junk[10*4096];
+                    fgets(junk,10*4096,fp); /* eat the line */
+                  }
 		}
 		else if(strcmp(cmd,"w")==0)
 		{
@@ -2881,4 +2956,734 @@ void set_print_string_function(void (*print_func)(const char*))
 	else
 		liblinear_print_string = print_func;
 }
+
+
+
+double openset_compute_risk(double far, double near, double pos_width, double fmeasure){
+  if(fmeasure == 0 ) return 1e99;
+  if(fmeasure < 0 ) {
+    fprintf(stderr,"\n\n openset ?HUH? negative fmeasures %g, not allowed risk =1e99\n Somthing is probably very wrong \n\n", fmeasure);
+    return 1e99;
+  }
+
+  /* nearly empty plane has very high risk in other way */ 
+  double width = far - near;
+  double mwidth =.0001;
+  if(width < mwidth) width = mwidth;
+  if(pos_width < mwidth) pos_width = mwidth;
+  double gen_ratio = width/pos_width;
+  double spec_ratio = pos_width/width;
+  if(gen_ratio < 1) gen_ratio=1;
+  if(spec_ratio < 1) spec_ratio=1;
+  double risk = (gen_ratio +  spec_ratio )  + 2/fmeasure;
+  return  risk;
+
+}
+
+double openset_error_for_optimization(double far, double near , double pos_width, int true_pos, int true_neg, int false_pos, int false_neg, struct parameter &param, 	int optimize= OPT_BALANCEDRISK){
+  double precision=0, recall=0;
+  optimize = param.optimize;
+  if ((true_pos+false_pos) > 0)
+    precision = ((double) (true_pos)/(true_pos+false_pos));
+  if((true_pos + false_neg) > 0)
+    recall = ((double) true_pos)/(true_pos + false_neg);
+
+  double fmeasure = 0;
+  if(param.beta*param.beta*precision + recall>0)  
+    fmeasure = (1+param.beta*param.beta) *precision*recall/(param.beta*param.beta*precision + recall);
+  double risk = openset_compute_risk(far, near, pos_width, fmeasure);
+
+  //  hmeasure = ((1-param.beta) * hfalse_reject + (param.beta)*hfalse_accept);
+  double terr;
+  if(optimize == OPT_FMEASURE)  terr = fmeasure; 
+  //  else if(optimize == OPT_HINGE)  terr = hmeasure; 
+  else if(optimize == OPT_RECALL)  terr = recall; 
+  else if(optimize == OPT_BALANCEDRISK)  terr = risk; 
+  else  terr = precision; 
+  return terr;
+}
+
+struct openset_score_data
+{
+  double label;
+  double score;
+};
+
+
+int openset_compare_thresholds(const void *v1, const void *v2){
+  double diff =(*(double*) v1) - (*(double*) v2);
+  if(diff== 0) return 0;
+  else     if(diff <  0) return -1;
+  return 1;
+}
+
+
+int openset_compare_scores(const void *v1, const void *v2){
+  double diff =((struct openset_score_data*) v1)->score - ((struct openset_score_data*) v2)->score;
+  if(diff== 0) return 0;
+  else     if(diff <  0) return -1;
+  return 1;
+}
+
+
+
+typedef  unsigned long ulong;
+
+void openset_find_planes(const struct problem &prob,  struct model *model,
+                              struct openset_score_data * scores,    double *threshold,
+                              double *alpha_ptr,double *omega_ptr, int correct_label)
+{
+
+    double maxval, minval;
+    double min_error = 0, alpha = 0, omega = 0, width_at_min=.99999999e299;
+    int base_min_index = -1;
+    int base_max_index = -1;
+    
+
+
+    min_error = .9999999e99; 
+
+	
+    qsort(threshold,(size_t)prob.l,sizeof(double),openset_compare_thresholds);
+    qsort(scores,(size_t)prob.l,sizeof(struct openset_score_data),openset_compare_scores);
+    if(model->param.vfile)     fprintf(model->param.vfile,"Min %lf   Max %lf\n", threshold[0],threshold[prob.l-1]);
+    int *rawnegcnt = (int *) malloc((ulong)(prob.l+3)*sizeof(int));
+    int *rawposcnt = (int *) malloc((ulong)(prob.l+3)*sizeof(int));
+    int *negcnt = rawnegcnt+1; // allow -1 index 
+    int *poscnt = rawposcnt+1; // allow -1 index 
+
+    
+    int zindex=-1, mindex=-1, inclass=0;
+    maxval= scores[0].score;
+    minval = scores[prob.l-1].score;
+    rawnegcnt[0] =     rawposcnt[0] =     negcnt[0] = poscnt[0] =0;
+    for (int i = 0; i < prob.l; i++)
+      {
+        if (scores[i].label == correct_label) { /* if a positive */ 
+          poscnt[i+1] = poscnt[i] +1; 
+          negcnt[i+1] = negcnt[i]; 
+          ++inclass;
+          /* find largest score for correct class */
+          if(scores[i].score >= maxval) {
+            maxval = scores[i].score;
+            zindex = i;
+          }
+          /* find largest negative score for correct class */
+          if(scores[i].score < minval) {
+            minval = scores[i].score;
+            mindex = i;
+          }
+          /* maybe base_max_index should be last pos poitn for a pos point  FIXME ??? */ 
+          base_max_index=i; 
+
+        } else { /* its a negatives */ 
+          poscnt[i+1] = poscnt[i]; 
+          negcnt[i+1] = negcnt[i]+1; 
+          /* want to find the last (largest) negative score for a negative point  */ 
+          if(scores[i].score < 0 && base_max_index != i) {
+            base_min_index = i;
+          } else {
+            /* find last postive score for a negative point.. */
+            //              base_max_index=i+1; 
+          }
+        }
+    }
+
+    // allow for index above prob.l
+    for (int i = prob.l; i < prob.l+2; i++){
+      poscnt[i] = poscnt[prob.l-1];
+      negcnt[i] = negcnt[prob.l-1];
+    }
+
+    if(base_max_index<0 || base_max_index> prob.l-1 ) base_max_index = prob.l-1;
+    /* compute max dilation for near and far planes */
+
+    /* 
+       Initally compute risk for max dilation of both near and far. 
+       while not at a minum, compute improvment from moving near and far, move the one with greater improvement.
+    */
+
+    double precision = 0, recall = 0, fmeasure = 0, error = 0;
+    int retrieved = 0, relevant = 0, correct = 0;
+    precision = 0; recall = 0; fmeasure = 0; error = 0;
+    int false_pos = 0, false_neg = 0;
+    double hfalse_accept = 0, hfalse_reject = 0;
+    int  true_neg=0, true_pos=0;
+    
+
+    if(base_max_index < base_min_index){
+      int temp = base_max_index;
+      base_max_index = base_min_index;
+      base_min_index = temp;
+    }
+      
+    int nearindex = base_min_index;
+    if(nearindex <0) nearindex=0;
+    int farindex = base_max_index;
+    if(farindex < 0) farindex = prob.l-1;
+    if(nearindex == farindex) nearindex=0;
+
+
+
+    double tl = scores[nearindex].score;
+    double tu = scores[farindex].score;
+    double width=(tu-tl);
+    double pos_width = fabs(1.0*maxval- minval) ; /* width the all positive data down to 0 plane (i.e. one-class starting point)*/
+
+    
+    //Compute precision and recall
+    for (int i = 0; i< prob.l ; i++)
+    {
+
+      if (scores[i].score >= tl && (scores[i].score <= tu)) //|| param.kernel_type == RBF)
+        {
+          retrieved++;
+          if (scores[i].label == correct_label) // a positive
+            {
+              relevant++;
+              ++correct;
+              true_pos++;
+            }
+          else{
+            double tmp = min(fabs(scores[i].score - tl), fabs(tu - scores[i].score));
+            hfalse_accept += max(width,tmp);
+            false_pos++;
+          }
+          
+        }
+      else
+        {
+          if (scores[i].label == correct_label){
+            double tmp = min(fabs(scores[i].score - tl), fabs(tu - scores[i].score));
+            hfalse_reject += max(width,tmp); 
+            false_neg++;
+          }
+          else{
+            ++correct;
+            true_neg++;
+          }
+        }
+    }
+          
+    if (retrieved > 0)
+      precision = ((double) relevant)/retrieved;
+    else
+      precision = 0;
+    
+    if(inclass!=0)
+      recall = ((double) relevant)/inclass;
+    else recall=0;
+
+    int tp = poscnt[farindex+1]-poscnt[nearindex];
+    int fp = negcnt[farindex+1]-negcnt[nearindex];
+    int tn = negcnt[prob.l]-fp;
+    int fn = poscnt[prob.l]-tp;
+
+
+    min_error = openset_error_for_optimization(tu,tl,pos_width, tp, tn, fp, fn,model->param);
+    width_at_min = width;
+    alpha = tl; 
+    omega = tu;
+
+    precision=0; recall=0;
+    if ((true_pos+false_pos) > 0)
+      precision = ((double) (true_pos)/(true_pos+false_pos));
+    if((true_pos + false_neg) > 0)
+      recall = ((double) true_pos)/(true_pos + false_neg);
+
+    double beta = model->param.beta;
+    if(beta*precision + recall > 0) 
+      fmeasure = (1+beta*beta) *precision*recall/(beta*beta*precision + recall);
+    else fmeasure=0;
+    double risk = openset_compute_risk(tu,tl, pos_width, fmeasure);
+
+    if (alpha > omega) 
+      fprintf(stderr,"Alpha > Omega.. something kinking happened.\n");
+
+    if(model->param.vfile)    
+      fprintf(model->param.vfile,"Before optimization min: %g, max: %g, precision: %g recall: %g F %g risk %g, error %g\n", 
+              alpha, omega, precision, recall,fmeasure, risk,  min_error);
+
+
+
+ 
+    if( ! model->param.exaustive_open)     {
+
+      /*  Greed optimization does not alwaays really improve the results much but is much faster */      
+      /* at this point we have risk, precision and recall.. now we optimize.  
+         By choice of starting points we have max recall, so must decide if moving near or far improves things the most  */  
+      int dtp[4], dtn[4], dfp[4],dfn[4];
+      double near_err_plus=0,  near_err=0;
+      double  far_err_plus=0, far_err=0;
+      int tindex;
+
+    
+      memset(dtp,0,sizeof(dtp));
+      memset(dtn,0,sizeof(dtn));
+      memset(dfp,0,sizeof(dfp));
+      memset(dfn,0,sizeof(dfn));
+
+      /* find best near for fixed far */ 
+      near_err = min_error;
+      tindex = nearindex;
+      for(int i=nearindex; i>0 ; i--){
+
+        tp = poscnt[farindex+1]-poscnt[i];
+        fp = negcnt[farindex+1]-negcnt[i];
+        tn = negcnt[prob.l]-fp;
+        fn = poscnt[prob.l]-tp;
+      
+      
+        near_err_plus = openset_error_for_optimization(scores[farindex].score, scores[i].score,pos_width, tp, tn, fp, fn,model->param);
+
+        /* if new best so far, keep parms */
+        if(near_err_plus < near_err ){
+          near_err = near_err_plus;
+          tindex = i;
+        }
+        if(nearindex < base_max_index-2) break; // limit how far we can go below first error point  fixme should this be a %? 
+      }
+      nearindex = tindex;
+      min_error = near_err;
+
+
+      //      if(model->param.kernel_type == LINEAR) {
+        /* find best near for fixed far */ 
+        far_err = min_error;
+        tindex = base_max_index;
+        for(int i=base_max_index; i< prob.l ; i++){
+
+          tp = poscnt[i+1]-poscnt[nearindex];
+          fp = negcnt[i+1]-negcnt[nearindex];
+          tn = negcnt[prob.l]-fp;
+          fn = poscnt[prob.l]-tp;
+          far_err_plus = openset_error_for_optimization(scores[i].score, scores[nearindex].score,pos_width, tp, tn, fp, fn,model->param);
+
+
+          /* if new best so far, keep parms */
+          if(far_err_plus < far_err ){
+            far_err = far_err_plus;
+            tindex = i;
+          }
+        }
+        farindex = tindex;
+        min_error = far_err;
+        //      }
+
+
+      /* find best near for fixed far */ 
+      near_err = min_error;
+      tindex = nearindex;
+      for(int i=nearindex; i>0 ; i--){
+
+        tp = poscnt[farindex+1]-poscnt[i];
+        fp = negcnt[farindex+1]-negcnt[i];
+        tn = negcnt[prob.l]-fp;
+        fn = poscnt[prob.l]-tp;
+      
+      
+        near_err_plus = openset_error_for_optimization(scores[farindex].score, scores[i].score,pos_width, tp, tn, fp, fn,model->param);
+
+        /* if new best so far, keep parms */
+        if(near_err_plus < near_err ){
+          near_err = near_err_plus;
+          tindex = i;
+        }
+        if(nearindex < base_max_index-2) break; // limit how far we can go below first error point  fixme should this be a %? 
+      }
+      nearindex = tindex;
+      min_error = near_err;
+
+
+      alpha = scores[nearindex].score;
+      omega = scores[farindex].score;
+
+      tp = poscnt[farindex+1]-poscnt[nearindex];
+      fp = negcnt[farindex+1]-negcnt[nearindex];
+      tn = negcnt[prob.l]-fp;
+      fn = poscnt[prob.l]-tp;
+
+      tl = alpha;
+      tu = omega;
+      width=(tu-tl);
+    
+    
+      if ((tp+fp) > 0)
+        precision = ((double) (tp)/(tp+fp));
+
+      if((tp+tn) > 0)    
+        recall = ((double) tp)/(tp+fn);
+      else recall=0;
+
+      beta = model->param.beta;
+      if(beta*precision + recall > 0) 
+        fmeasure = (1+beta*beta) *precision*recall/(beta*beta*precision + recall);
+      else fmeasure=0;
+      risk = openset_compute_risk(tu,tl, pos_width, fmeasure);
+
+
+      if(model->param.vfile) fprintf(model->param.vfile,"After stage one min: %g, max: %g, precision: %g recall: %g F %g risk %g, error %g\n", alpha, omega, precision, recall,fmeasure, risk,  min_error);
+
+
+      double  near_err_neg=0,far_err_neg=0;
+      int min_index=0, max_index=0,delta_near=0, delta_far=0 ;
+
+      /* now we do greed optimization from that starting point */ 
+
+      int tp,  fp,  tn,  fn; 
+
+
+      if(nearindex > 0){
+        int tp = poscnt[farindex+1]-poscnt[nearindex-1];
+        int fp = negcnt[farindex+1]-negcnt[nearindex-1];
+        int tn = negcnt[prob.l]-fp;
+        int fn = poscnt[prob.l]-tp;
+        near_err_neg = openset_error_for_optimization(scores[farindex].score, scores[nearindex-1].score,pos_width, tp, tn, fp, fn,model->param);
+      } else near_err_neg = 9e99;
+
+      if(nearindex+1 <prob.l){
+        tp = poscnt[farindex+1]-poscnt[nearindex+1];
+        fp = negcnt[farindex+1]-negcnt[nearindex+1];
+        tn = negcnt[prob.l]-fp;
+        fn = poscnt[prob.l]-tp;
+        near_err_plus = openset_error_for_optimization(scores[farindex].score, scores[nearindex+1].score,pos_width, tp, tn, fp, fn,model->param);
+      } else near_err_plus = 9e99;
+
+
+      if(near_err_plus < near_err_neg && near_err_plus < 1e99 )
+        {delta_near = +1; near_err = near_err_plus;}
+      else  if (near_err_neg < 1e99) {
+        delta_near = -1; near_err = near_err_neg;
+      }
+      else   {delta_near = 0; near_err = 9e99;}
+
+
+
+
+        {
+        if(farindex > 0){
+          tp = poscnt[farindex+1-1]-poscnt[nearindex];
+          fp = negcnt[farindex+1-1]-negcnt[nearindex];
+          tn = negcnt[prob.l]-fp;
+          fn = poscnt[prob.l]-tp;
+          far_err_neg = openset_error_for_optimization(scores[farindex-1].score, scores[nearindex].score,pos_width, tp, tn, fp, fn,model->param);
+        } else far_err_neg = 9e99;
+
+
+        if(farindex+1 < prob.l){
+          tp = poscnt[farindex+1+1]-poscnt[nearindex];
+          fp = negcnt[farindex+1+1]-negcnt[nearindex];
+          tn = negcnt[prob.l]-fp;
+          fn = poscnt[prob.l]-tp;
+          far_err_plus = openset_error_for_optimization(scores[farindex+1].score, scores[nearindex].score,pos_width, tp, tn, fp, fn,model->param);
+        } else far_err_plus = 9e99;
+
+        if(far_err_plus < far_err_neg && far_err_plus < 1e99 )
+          {delta_far = +1; far_err = far_err_plus;}
+        else  if (far_err_neg < 1e99) {
+          delta_far = -1; far_err = far_err_neg;}
+        else           {delta_far = 0; far_err = 9e99;}
+      }
+
+        
+      while(near_err < min_error  || far_err < min_error ){
+        //if near reduce more and we are not moving near to ofar(below first error point)  fixme should this be a %? 
+        // this was an early limit (used in paper), removed while working on squrles
+        //          if(near_err < far_err && nearindex >  base_min_index-5){/* if near reduced error more */ 
+        if(near_err < far_err){/* if near reduced error more */ 
+          /* don't let score regions overlap */ 
+          if( scores[nearindex+delta_near].score >= scores[farindex].score) break;
+          min_error = near_err;
+          nearindex += delta_near;
+          if(nearindex >=farindex) nearindex=farindex-1;;
+          if(nearindex <1) nearindex=1;
+          min_index=nearindex;
+          alpha = scores[nearindex].score;
+        } else if(far_err < min_error)  { /* far reduced error more */
+
+          /* don't let score regions overlap */ 
+          if( scores[nearindex].score >= scores[farindex+delta_far].score) break;
+
+          min_error = far_err;
+          farindex += delta_far;
+          if(farindex >= prob.l) farindex = prob.l-1;
+          if(farindex <= nearindex) farindex = nearindex+1;
+          max_index=farindex;
+
+          omega = scores[farindex].score;
+        } else{ // reached base_min so don't go any farther
+          min_error = near_err;
+          nearindex += delta_near;
+          if(nearindex >=farindex) nearindex=farindex-1;;
+          if(nearindex <1) nearindex=1;
+          min_index=nearindex;
+          alpha = scores[nearindex].score;
+          break;   
+        }
+
+        if(nearindex > 0){
+          tp = poscnt[farindex+1]-poscnt[nearindex-1];
+          fp = negcnt[farindex+1]-negcnt[nearindex-1];
+          tn = negcnt[prob.l]-fp;
+          fn = poscnt[prob.l]-tp;
+          near_err_neg = openset_error_for_optimization(scores[farindex].score, scores[nearindex-1].score,pos_width, tp, tn, fp, fn,model->param);
+        } else near_err_neg = 9e99;
+          
+        if(nearindex+1 < prob.l){          
+          tp = poscnt[farindex+1]-poscnt[nearindex+1];
+          fp = negcnt[farindex+1]-negcnt[nearindex+1];
+          tn = negcnt[prob.l]-fp;
+          fn = poscnt[prob.l]-tp;
+          near_err_plus = openset_error_for_optimization(scores[farindex].score, scores[nearindex+1].score,pos_width, tp, tn, fp, fn,model->param);
+        }else near_err_plus = 9e99;
+
+        if(near_err_plus < near_err_neg && near_err_plus < 1e99 )
+          {delta_near = +1; near_err = near_err_plus;}
+        else  if (near_err_neg < 1e99) {
+          delta_near = -1; near_err = near_err_neg;}
+        else{ delta_near = 0; near_err = 9e99;}
+
+        //        if(model->param.kernel_type == LINEAR) 
+{
+
+          if(farindex > 0) {
+            tp = poscnt[farindex+1-1]-poscnt[nearindex];
+            fp = negcnt[farindex+1-1]-negcnt[nearindex];
+            tn = negcnt[prob.l]-fp;
+            fn = poscnt[prob.l]-tp;
+            far_err_neg = openset_error_for_optimization(scores[farindex-1].score, scores[nearindex].score,pos_width, tp, tn, fp, fn,model->param);
+          } else far_err_neg = 9e99;
+            
+          if(farindex+1 < prob.l){
+            tp = poscnt[farindex+1+1]-poscnt[nearindex];
+            fp = negcnt[farindex+1+1]-negcnt[nearindex];
+            tn = negcnt[prob.l]-fp;
+            fn = poscnt[prob.l]-tp;
+            far_err_plus = openset_error_for_optimization(scores[farindex+1].score, scores[nearindex].score,pos_width, tp, tn, fp, fn,model->param);
+          } else far_err_plus = 9e99;
+                      
+          if(far_err_plus < far_err_neg && far_err_plus < 1e99 )
+            {delta_far = +1; far_err = far_err_plus;}
+          else  if (far_err_neg < 1e99) {
+            delta_far = -1; far_err = far_err_neg;}
+          else{ delta_far = 0; far_err = 9e99;}
+
+        }
+      }
+    }  else  { /* exaustive optimization removed for liblinear implmentation -- too slow for really large problems and rarely does better */
+
+
+#if 0
+      int bestfar, bestnear;
+      double besterr;
+      
+      besterr = min_error;
+      bestfar = farindex;
+      bestnear = nearindex;
+      
+      int farstart=1;
+      int farend = prob.l;
+            
+      for(farindex=farstart; farindex<farend ; farindex++){
+        while(farindex<(farend-1) && poscnt[farindex] == poscnt[farindex+1]) farindex++;
+        for(nearindex=farindex-1; nearindex>0 ; nearindex--){
+          while(nearindex>1 && poscnt[nearindex] == poscnt[nearindex-1]) nearindex--;
+          tl = scores[nearindex].score;
+          tu = scores[farindex].score;
+          width=(tu-tl);
+          if(fabs(width)< 1e-10) break;
+          tp = poscnt[farindex+1]-poscnt[nearindex];
+          fp = negcnt[farindex+1]-negcnt[nearindex];
+          tn = negcnt[prob.l]-fp;
+          fn = poscnt[prob.l]-tp;
+    
+        if ((tp+fp) > 0)
+          precision = ((double) (tp)/(tp+fp));
+
+        if((tp+tn) > 0)    
+          recall = ((double) tp)/(tp+fn);
+        else recall=0;
+        beta = model->param.beta;
+        if(beta*precision + recall > 0) 
+          fmeasure = (1+beta*beta) *precision*recall/(beta*beta*precision + recall);
+        else fmeasure=0;
+        double err = openset_compute_risk(tu,tl, pos_width, fmeasure);
+        //        fprintf(stderr,"doing optimization near: %d, far: %d, precision: %g recall: %g F %g risk %g, best %g\n", nearindex, farindex, precision, recall,fmeasure, err,  besterr);
+        
+
+        /* if new best so far, keep parms */
+        if(err <= besterr ){
+          besterr = err;
+          bestfar = farindex;
+          bestnear = nearindex;
+        }
+        }
+      }
+
+      nearindex = bestnear;
+      farindex = bestfar;
+      min_error = besterr;
+#else
+      fprintf(stderr,"Exaustive search not implmemented for liblinear \n");
+#endif
+
+    }/* end if doing optimization */
+
+    /* done core optization, set plane variable (alpha omega)  and compute final risk, then see if we need half-step tweeks */ 
+    alpha = scores[nearindex].score;
+    omega = scores[farindex].score;
+
+    tp = poscnt[farindex+1]-poscnt[nearindex];
+    fp = negcnt[farindex+1]-negcnt[nearindex];
+    tn = negcnt[prob.l]-fp;
+    fn = poscnt[prob.l]-tp;
+
+    tl = alpha;
+    tu = omega;
+    width=(tu-tl);
+    
+    
+    if ((tp+fp) > 0)
+      precision = ((double) (tp)/(tp+fp));
+
+    if((tp+tn) > 0)    
+      recall = ((double) tp)/(tp+fn);
+    else recall=0;
+
+    beta = model->param.beta;
+    if(beta*precision + recall > 0) 
+      fmeasure = (1+beta*beta) *precision*recall/(beta*beta*precision + recall);
+    else fmeasure=0;
+    risk = openset_compute_risk(tu,tl, pos_width, fmeasure);
+
+    if(model->param.exaustive_open &&  model->param.vfile ) fprintf(model->param.vfile,"After stage one min: %g, max: %g, precision: %g recall: %g F %g risk %g, error %g\n", alpha, omega, precision, recall,fmeasure, risk,  min_error);
+
+    /* if we have mixed answers on end, we we take point  between based on generalization preasure*/
+    if(nearindex > 0 && scores[nearindex].label == correct_label  && scores[nearindex-1].label != correct_label){
+      //      alpha = (scores[nearindex].score * (1-near_preasure/2) + scores[nearindex-1].score*(near_preasure/2));
+      alpha = (scores[nearindex].score * (1-model->param.near_preasure/2) + scores[nearindex-1].score*(model->param.near_preasure/2)); 
+      if(model->param.vfile) fprintf(model->param.vfile,"Near small margin adjust, %lf\n" , scores[nearindex].score -alpha );
+
+    }
+    // if first point, and last label was positive, expand down a bit using spacing from next to last point 
+    else if(nearindex == 0 && scores[nearindex].label == correct_label  ) {
+      alpha = scores[nearindex].score - pos_width * (model->param.near_preasure/2);
+      if(model->param.vfile) fprintf(model->param.vfile,"Near large margin adjust, %lf\n" , scores[nearindex].score -alpha );
+    }
+
+    if(scores[farindex].score < maxval && farindex+1 < prob.l && scores[farindex].label == correct_label  && scores[farindex+1].label != correct_label)  {
+      //      omega = (scores[farindex].score* (1-model->param.far_preasure/2)) + scores[farindex+1].score * (model->param.far_preasure/2);
+      omega = scores[farindex].score +  pos_width * (model->param.far_preasure/2);
+      if(model->param.vfile) fprintf(model->param.vfile,
+                                     "Far small large margin adjust, %lf\n" , 
+                                     (omega - scores[farindex].score ));
+    }
+    // if last point, and last label was positive, expand up a bit using spacing from next to last point 
+    else if(farindex+1 == prob.l){
+      omega = scores[farindex].score + pos_width * (model->param.far_preasure/2);
+      if(model->param.vfile) fprintf(model->param.vfile,
+                                     "Far large margin adjust, %lf\n" , 
+                                     (omega - scores[farindex].score) );
+    }
+
+    tp = poscnt[farindex+1]-poscnt[nearindex];
+    fp = negcnt[farindex+1]-negcnt[nearindex];
+    if(farindex==prob.l){
+      tp = poscnt[farindex]-poscnt[nearindex];
+      fp = negcnt[farindex]-negcnt[nearindex];
+    }
+    tn = negcnt[prob.l]-fp;
+    fn = poscnt[prob.l]-tp;
+
+    tl = alpha;
+    tu = omega;
+    width=(tu-tl);
+    
+    if ((tp+fp) > 0)
+      precision = ((double) (tp)/(tp+fp));
+    else precision=0;
+
+    if((tp+tn) > 0)    
+      recall = ((double) tp)/(tp+fn);
+    else recall=0;    
+
+    //    if(recall != 0 )  risk =  (width/pos_width + pos_width/width)/2 + param.beta /(precision*recall/(precision + recall));
+    beta = model->param.beta;
+    if(beta*precision + recall > 0) 
+      fmeasure = (1+beta*beta) *precision*recall/(beta*beta*precision + recall);
+    else fmeasure=0;
+    risk = openset_compute_risk(tu,tl, pos_width, fmeasure);
+    if(model->param.vfile) fprintf(model->param.vfile,"After Stage 2  min: %g, max: %g, precision: %g recall: %g F %g risk %g, error %g\n\n", alpha, omega, precision, recall,fmeasure, risk,  min_error);
+
+
+    if (model->param.optimize == OPT_PRECISION)
+    {
+      if(model->param.vfile) fprintf(model->param.vfile,"Optimizing precision given recall with beta of %g\n", model->param.beta);
+    }
+    else     if (model->param.optimize == OPT_RECALL)
+    {
+      if(model->param.vfile)         fprintf(model->param.vfile,"Optimizing recall given precision with beta of of %g\n", model->param.beta);
+    }
+    else     if (model->param.optimize == OPT_FMEASURE)
+    {
+      if(model->param.vfile)         fprintf(model->param.vfile,"Optimizing Fmeasure \n");
+    }
+
+    if(model->param.vfile)         fflush(model->param.vfile);
+    if(rawnegcnt) free(rawnegcnt); 
+    if(rawposcnt) free(rawposcnt); 
+
+    // push the actual answers back through the arguments
+    *alpha_ptr = alpha;
+    *omega_ptr = omega;
+}
+
+void openset_analyze_set(const struct problem &prob,  struct model *model_, const struct parameter *param )
+{
+
+  double *alpha_ptr = model_->alpha;
+  double *omega_ptr = model_->omega;
+  if(model_->alpha == NULL || model_->omega== NULL) {
+    model_->openset_dim=model_->nr_class;
+    alpha_ptr = model_->alpha = Malloc(double,model_->nr_class);
+    omega_ptr = model_->omega = Malloc(double,model_->nr_class);
+  }
+
+    struct openset_score_data * scores = (struct openset_score_data *) malloc((ulong)prob.l*sizeof(struct openset_score_data));
+    double *threshold  = (double *) malloc((ulong)(prob.l+2)*sizeof(double));
+
+    //    int nr_class = model_->nr_class;
+    
+    double *dec_values = Malloc(double, model_->nr_class*(prob.l+1));
+    //    double label=predict_values(model_, x, dec_values);
+
+    model_->openset_dim=0;// reset so we don't use it in computing scores 
+      for (int i = 0; i < prob.l; i++){
+        scores[i].label = prob.y[i];
+        predict_values(model_, prob.x[i], dec_values+i*model_->nr_class); // get score 
+      }
+
+    for(int jj=0; jj< model_->nr_class; jj++){
+      for (int i = 0; i < prob.l; i++){
+        threshold[i] =   scores[i].score = dec_values[i*model_->nr_class+jj];
+      }
+      
+      openset_find_planes(prob,  model_, scores,    threshold,alpha_ptr+jj,omega_ptr+jj,model_->label[jj]);
+    }
+    if(dec_values != NULL)
+      free(dec_values);
+
+    model_->openset_dim=model_->nr_class;
+    free(scores);
+    free(threshold);
+}
+
+
+
+
+/* takes a model in,  generates onevset model from it) */
+struct model *convertto_onevset_model(struct model *basemodel, const struct problem *prob, const struct parameter *param){
+  fprintf(stderr,"convertto_onevset_model not implemented yet\n");
+  return 0;
+}; 
 

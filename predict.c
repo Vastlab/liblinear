@@ -34,7 +34,7 @@ static char* readline(FILE *input)
 	while(strrchr(line,'\n') == NULL)
 	{
 		max_line_len *= 2;
-		line = (char *) realloc(line,max_line_len);
+		line = (char *) realloc(line,(size_t)max_line_len);
 		len = (int) strlen(line);
 		if(fgets(line+len,max_line_len-len,input) == NULL)
 			break;
@@ -53,6 +53,7 @@ void do_predict(FILE *input, FILE *output)
 	double *prob_estimates=NULL;
 	int j, n;
 	int nr_feature=get_nr_feature(model_);
+	double *dec_values = (double*)  malloc((size_t)(sizeof(double)* (size_t)model_->nr_class));
 	if(model_->bias>=0)
 		n=nr_feature+1;
 	else
@@ -68,9 +69,9 @@ void do_predict(FILE *input, FILE *output)
 			exit(1);
 		}
 
-		labels=(int *) malloc(nr_class*sizeof(int));
+		labels=(int *) malloc((size_t)nr_class*sizeof(int));
 		get_labels(model_,labels);
-		prob_estimates = (double *) malloc(nr_class*sizeof(double));
+		prob_estimates = (double *) malloc((size_t)nr_class*sizeof(double));
 		fprintf(output,"labels");
 		for(j=0;j<nr_class;j++)
 			fprintf(output," %d",labels[j]);
@@ -79,7 +80,7 @@ void do_predict(FILE *input, FILE *output)
 	}
 
 	max_line_len = 1024;
-	line = (char *)malloc(max_line_len*sizeof(char));
+	line = (char *)malloc((size_t)max_line_len*sizeof(char));
 	while(readline(input) != NULL)
 	{
 		int i = 0;
@@ -100,7 +101,7 @@ void do_predict(FILE *input, FILE *output)
 			if(i>=max_nr_attr-2)	// need one more for index = -1
 			{
 				max_nr_attr *= 2;
-				x = (struct feature_node *) realloc(x,max_nr_attr*sizeof(struct feature_node));
+				x = (struct feature_node *) realloc(x,(size_t)max_nr_attr*sizeof(struct feature_node));
 			}
 
 			idx = strtok(NULL,":");
@@ -144,8 +145,17 @@ void do_predict(FILE *input, FILE *output)
 		}
 		else
 		{
-			predict_label = predict(model_,x);
-			fprintf(output,"%g\n",predict_label);
+                  //			predict_label = predict(model_,x);
+                  predict_label = predict_values(model_,x,dec_values);
+                  int jj=0;
+                  for(jj=0;jj< model_->nr_class; jj++){
+                    if(model_->label[jj]==predict_label) break;
+                  }
+                  fprintf(output,"%g (%g): ",predict_label, target_label);
+                  for(jj=0;jj< model_->nr_class; jj++){
+                    fprintf(output,"%g ", dec_values[jj]);
+                  }
+                  fprintf(output," \n ");
 		}
 
 		if(predict_label == target_label)
@@ -231,7 +241,7 @@ int main(int argc, char **argv)
 		exit(1);
 	}
 
-	x = (struct feature_node *) malloc(max_nr_attr*sizeof(struct feature_node));
+	x = (struct feature_node *) malloc((size_t)max_nr_attr*sizeof(struct feature_node));
 	do_predict(input, output);
 	free_and_destroy_model(&model_);
 	free(line);

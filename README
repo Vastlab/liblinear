@@ -1,3 +1,42 @@
+Openset (1-Vs-set) extension for liblinear based on  Open Set Recognition as described in  "Toward Open Set Recognition", T-PAMI July 2013
+The first code release was bsed on libsvm but the libsvm core was too slow for large problems.  To support a comparative evaluation for our CVPR 2015 Paper (Toward Open World, A. Bendale and T. Boult, CVPR2015)
+we needed to make it much faster.  For the datasets use in that paper it libsvm  was takined > 3Weeks to produce a model file.  
+
+This reuses some of the code but also was extended to properly handel 
+multi-class files and produces multiple slabs (parallel dual plane models) in a much faster way. 
+If you use this please cite 
+Scheirer, W. J., de Rezende Rocha, A., Sapkota, A., & Boult, T. E. (2013). Toward open set recognition. Pattern Analysis and Machine Intelligence, IEEE Transactions on, 35(7), 1757-1772.
+and
+Bendale, A., & Boult, T.E. (2015, June). Toward Open World Recognition. In Computer Vision and Pattern Recognition (CVPR), 2015 IEEE Conference on IEEE.
+
+
+@article{scheirer2013toward,
+  title={Toward open set recognition},
+  author={Scheirer, Walter J and de Rezende Rocha, Anderson and Sapkota, Archana and Boult, Terrance E},
+  journal={Pattern Analysis and Machine Intelligence, IEEE Transactions on},
+  volume={35},
+  number={7},
+  pages={1757--1772},
+  year={2013},
+  publisher={IEEE}
+}
+
+@inproceedings{bendale2014reliable,
+  title={Toward Open World Recognition},
+  author={Bendale, Abhijit and Boult, Terrance E},
+  booktitle={Computer Vision and Pattern Recognition, 2014 IEEE Conference on},
+  year={2015},
+  organization={IEEE}
+}
+
+
+
+********************************************************************************
+Orginal README contents:
+
+
+
+
 LIBLINEAR is a simple package for solving large-scale regularized linear 
 classification and regression. It currently supports 
 - L2-regularized logistic regression/L2-loss support vector classification/L1-loss support vector classification

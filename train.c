@@ -5,7 +5,7 @@
 #include <ctype.h>
 #include <errno.h>
 #include "linear.h"
-#define Malloc(type,n) (type *)malloc((n)*sizeof(type))
+#define Malloc(type,n) (type *)malloc(((size_t)n)*sizeof(type))
 #define INF HUGE_VAL
 
 void print_null(const char *s) {}
@@ -49,6 +49,9 @@ void exit_with_help()
 	"-B bias : if bias >= 0, instance x becomes [x; bias]; if < 0, no bias term added (default -1)\n"
 	"-wi weight: weights adjust the parameter C of different classes (see README for details)\n"
 	"-v n: n-fold cross validation mode\n"
+	"-o bias : openset (1-vs-set) training mode with given bias (overrides -B)\n"
+        "-b beta   will set the beta for fmeasure used in openset training, default =1\n"
+        "-G nearpreasure farpressure   will adjust the pressures for openset optimiation. <0 will specalize, >0 will generalize. Default is 0 1 \n"
 	"-q : quiet mode (no outputs)\n"
 	);
 	exit(1);
@@ -73,7 +76,7 @@ static char* readline(FILE *input)
 	while(strrchr(line,'\n') == NULL)
 	{
 		max_line_len *= 2;
-		line = (char *) realloc(line,max_line_len);
+		line = (char *) realloc(line,(size_t)max_line_len);
 		len = (int) strlen(line);
 		if(fgets(line+len,max_line_len-len,input) == NULL)
 			break;
@@ -98,7 +101,7 @@ int main(int argc, char **argv)
 	char input_file_name[1024];
 	char model_file_name[1024];
 	const char *error_msg;
-
+ 
 	parse_command_line(argc, argv, input_file_name, model_file_name);
 	read_problem(input_file_name);
 	error_msg = check_parameter(&prob,&param);
@@ -116,6 +119,8 @@ int main(int argc, char **argv)
 	else
 	{
 		model_=train(&prob, &param);
+                if(param.do_open)
+                  openset_analyze_set(prob,   model_,  &param);
 		if(save_model(model_file_name, model_))
 		{
 			fprintf(stderr,"can't save model to file %s\n",model_file_name);
@@ -138,7 +143,7 @@ void do_cross_validation()
 	int total_correct = 0;
 	double total_error = 0;
 	double sumv = 0, sumy = 0, sumvv = 0, sumyy = 0, sumvy = 0;
-	double *target = Malloc(double, prob.l);
+	double *target = Malloc(double, (size_t)prob.l);
 
 	cross_validation(&prob,&param,nr_fold,target);
 	if(param.solver_type == L2R_L2LOSS_SVR ||
@@ -188,6 +193,9 @@ void parse_command_line(int argc, char **argv, char *input_file_name, char *mode
 	param.weight = NULL;
 	flag_cross_validation = 0;
 	bias = -1;
+        param.beta=1;
+        param.near_preasure = 0;
+        param.far_preasure = 1;
 
 	// parse options
 	for(i=1;i<argc;i++)
@@ -219,8 +227,8 @@ void parse_command_line(int argc, char **argv, char *input_file_name, char *mode
 
 			case 'w':
 				++param.nr_weight;
-				param.weight_label = (int *) realloc(param.weight_label,sizeof(int)*param.nr_weight);
-				param.weight = (double *) realloc(param.weight,sizeof(double)*param.nr_weight);
+				param.weight_label = (int *) realloc(param.weight_label,(size_t)param.nr_weight*sizeof(int));
+				param.weight = (double *) realloc(param.weight,(size_t)param.nr_weight*sizeof(double));
 				param.weight_label[param.nr_weight-1] = atoi(&argv[i-1][2]);
 				param.weight[param.nr_weight-1] = atof(argv[i]);
 				break;
@@ -234,6 +242,27 @@ void parse_command_line(int argc, char **argv, char *input_file_name, char *mode
 					exit_with_help();
 				}
 				break;
+
+                        case 'o':
+                          param.do_open = true;
+                          bias = atof(argv[i]);
+                          break;
+
+
+                        case 'd':
+                            param.vfile = fopen(argv[i],"w");
+                          break;
+
+                        case 'b':
+                          param.beta = atof(argv[i]);
+                          break;
+
+
+			case 'G':
+				param.near_preasure = atof(argv[i++]);
+				param.far_preasure = atof(argv[i]);
+				break;
+
 
 			case 'q':
 				print_func = &print_null;
@@ -264,7 +293,10 @@ void parse_command_line(int argc, char **argv, char *input_file_name, char *mode
 			p = argv[i];
 		else
 			++p;
-		sprintf(model_file_name,"%s.model",p);
+                if(param.do_open)
+                  sprintf(model_file_name,"%s.1vset",p);
+                else
+                  sprintf(model_file_name,"%s.1vset",p);
 	}
 
 	if(param.eps == INF)
@@ -336,7 +368,7 @@ void read_problem(const char *filename)
 
 	prob.y = Malloc(double,prob.l);
 	prob.x = Malloc(struct feature_node *,prob.l);
-	x_space = Malloc(struct feature_node,elements+prob.l);
+	x_space = Malloc(struct feature_node,(size_t)elements+(size_t)prob.l);
 
 	max_index = 0;
 	j=0;
