@@ -2077,7 +2077,7 @@ static void transpose(const problem *prob, feature_node **x_space_ret, problem *
 	for(i=1; i<n+1; i++)
 		col_ptr[i] += col_ptr[i-1] + 1;
 
-	x_space = new feature_node[nnz+n];
+	x_space = new feature_node[nnz+(size_t)n];
 	for(i=0; i<n; i++)
 		prob_col->x[i] = &x_space[col_ptr[i]];
 
@@ -2546,8 +2546,10 @@ double predict_values(const struct model *model_, const struct feature_node *x, 
 			if(dec_values[i] > dec_values[dec_max_idx])
 				dec_max_idx = i;
 		}
-                if(dec_values[dec_max_idx]>0) return model_->label[dec_max_idx];
-                else return -999999;
+                if(model_->openset_dim >0 && model_->omega){  // if openset check that its in the slab, else return -99999 as a unknown unknown
+                  if(dec_values[dec_max_idx]>0) return model_->label[dec_max_idx];
+                  else return -999999;
+                } else return model_->label[dec_max_idx];  // if closeset return max label (even if negative) 
 	}
 }
 
@@ -3560,18 +3562,22 @@ void openset_find_planes(const struct problem &prob,  struct model *model,
 
     /* if we have mixed answers on end, we we take point  between based on generalization preasure*/
     if(nearindex > 0 && scores[nearindex].label == correct_label  && scores[nearindex-1].label != correct_label){
+           alpha = (scores[nearindex].score * (1-model->param.near_preasure/2) + scores[nearindex-1].score*(model->param.near_preasure/2));
+           if(model->param.vfile) fprintf(model->param.vfile,"Near small margin adjust, %lf\n" , scores[nearindex].score -alpha );
+    }
+    else if(nearindex > 0){
       //      alpha = (scores[nearindex].score * (1-near_preasure/2) + scores[nearindex-1].score*(near_preasure/2));
-      alpha = (scores[nearindex].score * (1-model->param.near_preasure/2) + scores[nearindex-1].score*(model->param.near_preasure/2)); 
-      if(model->param.vfile) fprintf(model->param.vfile,"Near small margin adjust, %lf\n" , scores[nearindex].score -alpha );
-
+      alpha = scores[nearindex].score - pos_width * model->param.near_preasure/2;
+      if(model->param.vfile) fprintf(model->param.vfile,"Near full margin adjust, %lf\n" , scores[nearindex].score -alpha );
     }
-    // if first point, and last label was positive, expand down a bit using spacing from next to last point 
-    else if(nearindex == 0 && scores[nearindex].label == correct_label  ) {
-      alpha = scores[nearindex].score - pos_width * (model->param.near_preasure/2);
-      if(model->param.vfile) fprintf(model->param.vfile,"Near large margin adjust, %lf\n" , scores[nearindex].score -alpha );
+    // if first point, and last label was positive, expand down using full pressure bit using spacing from next to last point 
+    if(nearindex == 0 && scores[nearindex].label == correct_label  ) {
+      alpha = scores[nearindex].score - pos_width * model->param.near_preasure;
+      if(model->param.vfile) fprintf(model->param.vfile,"Near half margin adjust, %lf\n" , scores[nearindex].score -alpha );
     }
 
-    if(scores[farindex].score < maxval && farindex+1 < prob.l && scores[farindex].label == correct_label  && scores[farindex+1].label != correct_label)  {
+    //    if(scores[farindex].score < maxval && farindex+1 < prob.l && scores[farindex].label == correct_label  && scores[farindex+1].label != correct_label)  {
+    if(farindex+1 < prob.l )  {
       //      omega = (scores[farindex].score* (1-model->param.far_preasure/2)) + scores[farindex+1].score * (model->param.far_preasure/2);
       omega = scores[farindex].score +  pos_width * (model->param.far_preasure/2);
       if(model->param.vfile) fprintf(model->param.vfile,

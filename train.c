@@ -50,6 +50,8 @@ void exit_with_help()
 	"-wi weight: weights adjust the parameter C of different classes (see README for details)\n"
 	"-v n: n-fold cross validation mode\n"
 	"-o bias : openset (1-vs-set) training mode with given bias (overrides -B)\n"
+        "-m modelfile:  for openset only read an existing model and retrain with openset parameters speciied and output new model"
+        "-d debuglogfile:  for openset outpud debugging log of openset fitting"
         "-b beta   will set the beta for fmeasure used in openset training, default =1\n"
         "-G nearpreasure farpressure   will adjust the pressures for openset optimiation. <0 will specalize, >0 will generalize. Default is 0 1 \n"
 	"-q : quiet mode (no outputs)\n"
@@ -118,15 +120,19 @@ int main(int argc, char **argv)
 	}
 	else
 	{
-		model_=train(&prob, &param);
-                if(param.do_open)
-                  openset_analyze_set(prob,   model_,  &param);
-		if(save_model(model_file_name, model_))
-		{
-			fprintf(stderr,"can't save model to file %s\n",model_file_name);
-			exit(1);
-		}
-		free_and_destroy_model(&model_);
+          if(param.mfile==NULL) model_=train(&prob, &param);
+          else {
+            model_=load_model(param.mfile); 
+            model_->param = param; // copy new desired params
+          }
+          if(param.do_open)
+            openset_analyze_set(prob,   model_,  &param);
+          if(save_model(model_file_name, model_))
+            {
+              fprintf(stderr,"can't save model to file %s\n",model_file_name);
+              exit(1);
+            }
+          free_and_destroy_model(&model_);
 	}
 	destroy_param(&param);
 	free(prob.y);
@@ -194,6 +200,8 @@ void parse_command_line(int argc, char **argv, char *input_file_name, char *mode
 	flag_cross_validation = 0;
 	bias = -1;
         param.beta=1;
+        param.vfile=NULL;
+        param.mfile=NULL;
         param.near_preasure = 0;
         param.far_preasure = 1;
 
@@ -252,6 +260,13 @@ void parse_command_line(int argc, char **argv, char *input_file_name, char *mode
                         case 'd':
                             param.vfile = fopen(argv[i],"w");
                           break;
+
+
+                        case 'm':
+                          param.mfile = strdup(argv[i]);
+                          param.do_open = true; // implies openset
+                          break;
+
 
                         case 'b':
                           param.beta = atof(argv[i]);

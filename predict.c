@@ -45,6 +45,7 @@ static char* readline(FILE *input)
 void do_predict(FILE *input, FILE *output)
 {
 	int correct = 0;
+	int falsepos=0, falseneg=0, truepos=0, trueneg=0;
 	int total = 0;
 	double error = 0;
 	double sump = 0, sumt = 0, sumpp = 0, sumtt = 0, sumpt = 0;
@@ -157,16 +158,30 @@ void do_predict(FILE *input, FILE *output)
                   }
                   fprintf(output," \n ");
 		}
+                int unknown=true;
+                for(int jj=0;jj< model_->nr_class; jj++){
+                  if(model_->label[jj] == target_label) {
+                    unknown = false;
+                    break;
+                  }
+                }
 
-		if(predict_label == target_label)
-			++correct;
-		error += (predict_label-target_label)*(predict_label-target_label);
-		sump += predict_label;
-		sumt += target_label;
-		sumpp += predict_label*predict_label;
-		sumtt += target_label*target_label;
-		sumpt += predict_label*target_label;
-		++total;
+		if((predict_label == target_label) || (unknown &&  predict_label == -999999)){
+                  ++correct;++truepos;}
+                else ++falsepos;
+                if(predict_label == -999999){
+                  if(unknown) ++trueneg;
+                  else ++falseneg;
+                }
+
+                error += (predict_label-target_label)*(predict_label-target_label);
+                sump += predict_label;
+                sumt += target_label;
+                sumpp += predict_label*predict_label;
+                sumtt += target_label*target_label;
+                sumpt += predict_label*target_label;
+                ++total;
+
 	}
 	if(check_regression_model(model_))
 	{
@@ -178,6 +193,19 @@ void do_predict(FILE *input, FILE *output)
 	}
 	else
 		info("Accuracy = %g%% (%d/%d)\n",(double) correct/total*100,correct,total);
+
+        if ( (truepos+falsepos) > 0){
+          double precision = ((double) (truepos)/(truepos+falsepos));
+          double recall = 0;
+          if((truepos + falseneg) > 0) recall = ((double) truepos)/(truepos + falseneg);
+          double fmeasure = 0;
+          if( (precision + recall > 0)) fmeasure = 2* precision*recall/(precision + recall);
+          printf("  Precision=%lf,   Recall=%lf   Fmeasure=%lf\n",precision, recall, fmeasure);
+          printf("   Total tests=%d, True pos %d True Neg %d, False Pos %d, False neg %d\n",
+                 truepos+ trueneg+ falsepos+ falseneg, truepos, trueneg, falsepos, falseneg);
+        } else if(((truepos+falsepos)==0)){
+          printf("  Precision=0,   Recall=0   Fmeasure=0\n");
+        }
 	if(flag_predict_probability)
 		free(prob_estimates);
 }

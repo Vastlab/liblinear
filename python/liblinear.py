@@ -188,6 +188,12 @@ class parameter(Structure):
 			elif argv[i] == "-B":
 				i = i + 1
 				self.bias = float(argv[i])
+			elif argv[i] == "-b":
+				i = i + 1
+				self.beta = float(argv[i])
+			elif argv[i] == "-o":
+				i = i + 1
+				self.do_open = float(argv[i])
 			elif argv[i] == "-v":
 				i = i + 1
 				self.cross_validation = 1

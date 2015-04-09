@@ -41,6 +41,7 @@ struct parameter
         double beta; /* for use in f-measure optimization */ 
         double near_preasure, far_preasure; /* for openset risk preasures */
         FILE* vfile; /* for logging verbose stuff during debugging */ 
+        char* mfile; /* filename for loading a model to update for openset */ 
         int  rejectedID; /* id for rejected classes (-99999 is the default) */ 
 };
 
